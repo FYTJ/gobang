@@ -209,10 +209,7 @@ class AI:
         self.minv = None
         self.name = name
         self.color = color  # 黑1白2
-        self.extension_threshold = 2000  # 单步延伸阈值
-        # TODO: 定义初始阈值
-        self.p_threshold = 0.1
-        self.lmr_threshold = 20
+        self.lmr_threshold = 10
         self.lmr_min_depth = 0
         self.patterns = [
             (r'11111', 50000),  # 连五
@@ -292,8 +289,6 @@ class AI:
         :var self.lmr_min_depth: (int) 在达到一定深度后进行LMR
         """
         v, move = float('-inf'), None
-        # TODO: 每步后根据depth更新阈值，p可以使用指数衰减
-        self.p_threshold = 0.1
         self.lmr_threshold = 10
         self.lmr_min_depth = 3
         current_eval = self.heuristic_eval(game, state, player)
@@ -302,16 +297,13 @@ class AI:
         act = {}
         for next_pos in game.actions(state):
             act[next_pos] = self.heuristic_eval(game, game.result(state, next_pos, player),
-                                                player, next_pos, current_eval)
+                                                player, next_pos, current_eval, state)
         act = dict(sorted(act.items(), key=lambda i: i[1], reverse=True))
         actions = list(act.keys())
         self.maxv += 1
         for order, pos in enumerate(actions):
             if pos not in game.neighbors(state):
                 continue
-            # # ProbCut
-            # if self._should_prob_cut(current_eval, act[pos]):
-            #     continue
             else:
                 # LMR
                 if order >= self.lmr_threshold and depth >= self.lmr_min_depth:
@@ -340,36 +332,25 @@ class AI:
         :var self.lmr_min_depth: (int) 在达到一定深度后进行LMR
         """
         v, move = float('inf'), None
-        # TODO: 每步后根据depth更新阈值
-        self.p_threshold = 0.1
         self.lmr_threshold = 10
         self.lmr_min_depth = 2
         current_eval = self.heuristic_eval(game, state, player)
-        # 2024/12/08 22:22 current_eval = self.heuristic_eval(game, state, 3 - player)
         if game.is_cutoff(state, depth):
             return current_eval, None
         act = {}
         for next_pos in game.actions(state):
             act[next_pos] = self.heuristic_eval(game, game.result(state, next_pos, 3 - player),
-                                                player, next_pos, current_eval)
-            # 2024/12/08 22:23 act[next_pos] = self.heuristic_eval(game, game.result(state, next_pos, 3 - player),
-            #                                                 3 - player, next_pos, current_eval)
-        # 2024/12/09 10:12 act = dict(sorted(act.items(), key=lambda i: i[1], reverse=True))
+                                                player, next_pos, current_eval, state)
         act = dict(sorted(act.items(), key=lambda i: i[1]))
         actions = list(act.keys())
         self.minv += 1
         for order, pos in enumerate(actions):
             if pos not in game.neighbors(state):
                 continue
-            # # ProbCut
-            # if self._should_prob_cut(current_eval, act[pos]):
-            #     continue
             else:
                 # LMR
                 if order >= self.lmr_threshold and depth >= self.lmr_min_depth:
                     continue
-                # 2024/12/09 12:15
-                # v_new, _ = self._max_value(game, game.result(state, pos, player), player, alpha, beta, depth - 1)
                 v_new, _ = self._max_value(game, game.result(state, pos, 3 - player), player, alpha, beta, depth - 1)
             if v_new < v:
                 v, move = v_new, pos
@@ -379,61 +360,75 @@ class AI:
             beta = min(beta, v)
         return v, move
 
-    def _should_prob_cut(self, current_eval, next_eval) -> bool:
-        """
-        是否对节点进行概率截断
-        :return: (bool) 是否对节点进行概率截断
-        :var self.p_threshold (int) 概率截断阈值，在开局后可以采用指数衰减，且给定阈值下界，如0.01
-        :note: 在开局阶段棋盘分枝较多且分数差异不明显，可以较激进地截断，阈值可以较低；在靠近终止状态时，需更加谨慎，阈值应该较高。
-        """
-        # 如果再走一步后子力价值远低于当前，则进行剪枝的概率较大
-        score_diff = current_eval - next_eval
-        if score_diff < 0:
-            return False
-        # TODO: "1 + score_diff" 中的1是一个基数，需要另作详细确定。score_diff越大则概率应当越大
-        probability = score_diff / 50000  # 转换为概率
-        return random.random() < self.p_threshold * probability
-
     def heuristic_eval(self, game: Game, state: np.ndarray, player: int, last_mov: (int, int) = None,
-                       prev_eval: int = None) -> int:
+                       prev_eval: int = None, prev_state: np.ndarray = None) -> int:
         """
         计算当前状态对指定玩家的评价
         :param game: (Game) 游戏对象
         :param state: (np.ndarray) 棋盘
         :param player: (int) 当前玩家
         :param last_mov: (int, int) 上一次落子位置，只需要评估该位置附近的区域。
-        :param prev_eval: (int) 上一次的评估得分，如果为None，则为第一次评估，需要对整个棋盘进行评估。
+        :param prev_eval: (int) 上一次的评估得分。如果为None，则为第一次评估，需要对整个棋盘进行评估。
+        :param prev_state: (np.ndarray) 未在last_mov处落子时的棋盘，默认值为None，用于增量更新
         :return: (int) 评估得分
+        :note: 增量更新条件：last_mov, prev_eval, prev_state 同时有值
+        :note: 增量更新逻辑如下
+            current_eval = prev_eval + target_eval + \delta_eval - \delta_opponent_eval
+            \delta_eval, \delta_opponent 初始化为0
+            target_eval针对last_mov处的子进行评价
+            确定last_mov的作用域为：以last_mov为中心四个方向range(-4, 5)\{0}的棋盘点
+            对作用域上的一个方向direction上的一个子:
+            \delta_target = _eval_pos(state, player, target_pos, direction)
+             - _eval_pos(prev_state, player, target_pos, direction)
+             若为player，则\delta_eval += \delta_target，3 - player亦然
         """
         self.count += 1
         if last_mov and game.check_ban(state, player, last_mov):
             return -250000
-        # if prev_eval and last_mov:
-        #     # 增量更新
-        #     delta_eval = self._eval_pos(state, player, last_mov)
-        #     delta_opponent_eval = self._eval_pos(state, 3 - player, last_mov)
-        #     return prev_eval + delta_eval - delta_opponent_eval
-        if 1:
+        if prev_eval and last_mov and prev_state is not None:
+            # 增量更新
+            all_directions = [(1, 0), (0, 1), (1, 1), (1, -1)]
+            target_eval = delta_eval = delta_opponent_eval = 0
+            for direction in all_directions:
+                target_eval += self._eval_pos(state, player, last_mov, direction)
+            for direction in all_directions:
+                for step in list(range(-4, 0)) + list(range(1, 5)):
+                    x = last_mov[0] + step * direction[0]
+                    y = last_mov[1] + step * direction[1]
+                    if 0 <= x < 15 and 0 <= y < 15:
+                        current_target_eval = self._eval_pos(state, player, (x, y), direction)
+                        prev_target_eval = self._eval_pos(prev_state, player, (x, y), direction)
+                        if state[x][y] == player:
+                            delta_eval += current_target_eval - prev_target_eval
+                        else:
+                            delta_opponent_eval += current_target_eval - prev_target_eval
+            return prev_eval + target_eval + delta_eval - delta_opponent_eval
+        else:
             # 全盘评估
             total_eval = 0
+            directions = [(1, 0), (0, 1), (1, 1), (1, -1)]
             for x in range(15):
                 for y in range(15):
-                    if state[x][y] == player:
-                        total_eval += self._eval_pos(state, player, (x, y))
-                    elif state[x][y] == 3 - player:
-                        total_eval -= self._eval_pos(state, 3 - player, (x, y)) * 1.2
+                    for direction in directions:
+                        if state[x][y] == player:
+                            total_eval += self._eval_pos(state, player, (x, y), direction)
+                        elif state[x][y] == 3 - player:
+                            total_eval -= self._eval_pos(state, 3 - player, (x, y), direction) * 1.2
             return total_eval
 
-    def _eval_pos(self, state: np.ndarray, player: int, pos: (int, int)) -> int:
+    def _eval_pos(self, state: np.ndarray, player: int, pos: (int, int), direction: (int, int)) -> int:
         """
         对指定位置的棋子计算评价
+        :param state: (np.ndarray) 棋盘
+        :param player: (int )玩家
+        :param pos: (int, int) 目标评价位置
+        :param direction: [(int, int)] 方向
         """
         x, y = pos
         total_eval = 0
-        directions = [(1, 0), (0, 1), (1, 1), (-1, 1)]
-        for dx, dy in directions:
-            line = self._get_line(state, player, x, y, dx, dy)
-            total_eval += self._match_patterns(line)
+        dx, dy = direction
+        line = self._get_line(state, player, x, y, dx, dy)
+        total_eval += self._match_patterns(line)
         return total_eval
 
     @staticmethod
@@ -486,7 +481,7 @@ def human_play(game: Game):
 
 
 def ai_play(game: Game, ai: AI, is_first_move=False):
-    move = ai.heuristic_alpha_beta_search(game, 3, is_first_move)
+    move = ai.heuristic_alpha_beta_search(game, 1, is_first_move)
     game.play(move)
     print(ai.__repr__(), move[0] + 1, move[1] + 1)
     game.display_board(move)
@@ -527,7 +522,12 @@ def main():
             ai_play(game, ai1)
         print(game.record_chess)
     elif mode == 4:
-        existed_chess = [(7,7), (8,7), (7,9), (9,8), (7,6), (7,8), (5,9), (6,9), (9,6), (5,10), (8,8), (3,12), (4,11), (8,6), (6,10), (5,11), (10,6), (9,7), (9,9), (10,10), (5,5), (6,6), (7,11), (4,8), (7,5), (6,5), (6,8), (8,10), (3,11), (4,10), (7,4), (7,3), (8,12), (9,13), (8,5), (6,3), (10,7), (11,8), (9,4), (6,7), (6,4), (10,4), (8,4), (5,4), (4,3), (9,10), (11,2), (10,3), (7,10), (8,9), (7,13), (7,12), (5,13), (6,13), (8,11), (4,5), (10,11), (6,11), (11,11), (5,6)
+        existed_chess = [(7, 7), (8, 7), (7, 9), (9, 8), (7, 6), (7, 8), (5, 9), (6, 9), (9, 6), (5, 10), (8, 8),
+                         (3, 12), (4, 11), (8, 6), (6, 10), (5, 11), (10, 6), (9, 7), (9, 9), (10, 10), (5, 5), (6, 6),
+                         (7, 11), (4, 8), (7, 5), (6, 5), (6, 8), (8, 10), (3, 11), (4, 10), (7, 4), (7, 3), (8, 12),
+                         (9, 13), (8, 5), (6, 3), (10, 7), (11, 8), (9, 4), (6, 7), (6, 4), (10, 4), (8, 4), (5, 4),
+                         (4, 3), (9, 10), (11, 2), (10, 3), (7, 10), (8, 9), (7, 13), (7, 12), (5, 13), (6, 13),
+                         (8, 11), (4, 5), (10, 11), (6, 11), (11, 11), (5, 6)
                          ]
         for pos in existed_chess:
             game.play(pos)
