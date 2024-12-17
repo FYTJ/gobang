@@ -396,13 +396,15 @@ class AI:
                     x = last_mov[0] + step * direction[0]
                     y = last_mov[1] + step * direction[1]
                     if 0 <= x < 15 and 0 <= y < 15:
-                        current_target_eval = self._eval_pos(state, player, (x, y), direction)
-                        prev_target_eval = self._eval_pos(prev_state, player, (x, y), direction)
                         if state[x][y] == player:
+                            current_target_eval = self._eval_pos(state, player, (x, y), direction)
+                            prev_target_eval = self._eval_pos(prev_state, player, (x, y), direction)
                             delta_eval += current_target_eval - prev_target_eval
-                        else:
+                        elif state[x][y] == 3 - player:
+                            current_target_eval = self._eval_pos(state, 3 - player, (x, y), direction)
+                            prev_target_eval = self._eval_pos(prev_state, 3 - player, (x, y), direction)
                             delta_opponent_eval += current_target_eval - prev_target_eval
-            return prev_eval + target_eval + delta_eval - delta_opponent_eval
+            return prev_eval + target_eval + delta_eval - delta_opponent_eval * 1.2
         else:
             # 全盘评估
             total_eval = 0
@@ -418,9 +420,9 @@ class AI:
 
     def _eval_pos(self, state: np.ndarray, player: int, pos: (int, int), direction: (int, int)) -> int:
         """
-        对指定位置的棋子计算评价
+        对指定玩家和指定位置的棋子计算评价
         :param state: (np.ndarray) 棋盘
-        :param player: (int )玩家
+        :param player: (int) 玩家
         :param pos: (int, int) 目标评价位置
         :param direction: [(int, int)] 方向
         """
@@ -481,7 +483,7 @@ def human_play(game: Game):
 
 
 def ai_play(game: Game, ai: AI, is_first_move=False):
-    move = ai.heuristic_alpha_beta_search(game, 1, is_first_move)
+    move = ai.heuristic_alpha_beta_search(game, 3, is_first_move)
     game.play(move)
     print(ai.__repr__(), move[0] + 1, move[1] + 1)
     game.display_board(move)
@@ -522,12 +524,7 @@ def main():
             ai_play(game, ai1)
         print(game.record_chess)
     elif mode == 4:
-        existed_chess = [(7, 7), (8, 7), (7, 9), (9, 8), (7, 6), (7, 8), (5, 9), (6, 9), (9, 6), (5, 10), (8, 8),
-                         (3, 12), (4, 11), (8, 6), (6, 10), (5, 11), (10, 6), (9, 7), (9, 9), (10, 10), (5, 5), (6, 6),
-                         (7, 11), (4, 8), (7, 5), (6, 5), (6, 8), (8, 10), (3, 11), (4, 10), (7, 4), (7, 3), (8, 12),
-                         (9, 13), (8, 5), (6, 3), (10, 7), (11, 8), (9, 4), (6, 7), (6, 4), (10, 4), (8, 4), (5, 4),
-                         (4, 3), (9, 10), (11, 2), (10, 3), (7, 10), (8, 9), (7, 13), (7, 12), (5, 13), (6, 13),
-                         (8, 11), (4, 5), (10, 11), (6, 11), (11, 11), (5, 6)
+        existed_chess = [(7, 7), (6, 6), (7, 8), (7, 5), (8, 7), (5, 7)
                          ]
         for pos in existed_chess:
             game.play(pos)
