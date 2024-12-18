@@ -1,9 +1,11 @@
 # 人工智能：现代方法 P126
 # chatgpt title: Minimax搜索算法、五子棋AI优化建议
 import datetime
+import multiprocessing
 import random
 import re
 import cProfile
+import time
 
 import numpy as np
 
@@ -274,6 +276,12 @@ class AI:
         print(self.count, self.maxv, self.minv)
         return move
 
+    def _concurrent_max_value(self, game: Game, state: np.ndarray, player: int, alpha: int | float, beta: int | float,
+                   depth: int, pos: (int, int)):
+        v, _ = self._min_value(game, game.result(state, pos, player), player, alpha, beta, depth - 1)
+        return v, pos
+
+
     def _max_value(self, game: Game, state: np.ndarray, player: int, alpha: int | float, beta: int | float,
                    depth: int) -> (int, (int, int)):
         """
@@ -301,6 +309,19 @@ class AI:
         act = dict(sorted(act.items(), key=lambda i: i[1], reverse=True))
         actions = list(act.keys())
         self.maxv += 1
+        if depth == 3:
+            with multiprocessing.Pool(multiprocessing.cpu_count()) as pool:
+                results = []
+                for order, pos in enumerate(actions):
+                    if pos not in game.neighbors(state):
+                        continue
+                    else:
+                        # LMR
+                        if order >= self.lmr_threshold and depth >= self.lmr_min_depth:
+                            continue
+                        results.append(pool.apply_async(self._concurrent_max_value, args=(game, state, player, alpha, beta, depth - 1, pos)))
+                results = [result.get() for result in results]
+                return max(results)
         for order, pos in enumerate(actions):
             if pos not in game.neighbors(state):
                 continue
@@ -373,14 +394,14 @@ class AI:
         :return: (int) 评估得分
         :note: 增量更新条件：last_mov, prev_eval, prev_state 同时有值
         :note: 增量更新逻辑如下
-            current_eval = prev_eval + target_eval + \delta_eval - \delta_opponent_eval
-            \delta_eval, \delta_opponent 初始化为0
+            current_eval = prev_eval + target_eval + delta_eval - delta_opponent_eval
+            delta_eval, delta_opponent 初始化为0
             target_eval针对last_mov处的子进行评价
-            确定last_mov的作用域为：以last_mov为中心四个方向range(-4, 5)\{0}的棋盘点
+            确定last_mov的作用域为：以last_mov为中心四个方向range(-4, 5){0}的棋盘点
             对作用域上的一个方向direction上的一个子:
-            \delta_target = _eval_pos(state, player, target_pos, direction)
+            delta_target = _eval_pos(state, player, target_pos, direction)
              - _eval_pos(prev_state, player, target_pos, direction)
-             若为player，则\delta_eval += \delta_target，3 - player亦然
+             若为player，则delta_eval += delta_target，3 - player亦然
         """
         self.count += 1
         if last_mov and game.check_ban(state, player, last_mov):
@@ -483,9 +504,12 @@ def human_play(game: Game):
 
 
 def ai_play(game: Game, ai: AI, is_first_move=False):
+    start = time.time()
     move = ai.heuristic_alpha_beta_search(game, 3, is_first_move)
+    end = time.time()
     game.play(move)
     print(ai.__repr__(), move[0] + 1, move[1] + 1)
+    print(f'cpu_time: {end - start}')
     game.display_board(move)
 
 
@@ -524,8 +548,16 @@ def main():
             ai_play(game, ai1)
         print(game.record_chess)
     elif mode == 4:
-        existed_chess = [(7, 7), (6, 6), (7, 8), (7, 5), (8, 7), (5, 7)
-                         ]
+        existed_chess = [
+            (7, 7), (6, 7), (6, 5), (5, 6), (7, 8), (7, 6), (8, 5), (5, 5), (6, 6), (5, 4), (5, 7), (5, 2), (5, 3),
+            (7, 5), (7, 3), (6, 3), (4, 5), (3, 4), (4, 4), (4, 3), (2, 5), (6, 1), (7, 0), (6, 2), (7, 2), (6, 0),
+            (6, 4), (7, 1), (8, 1), (8, 2), (8, 6), (10, 4), (9, 3), (8, 4), (5, 9), (6, 8), (11, 4), (10, 3), (10, 5),
+            (8, 7), (12, 3), (13, 2), (12, 5), (11, 5), (12, 6), (12, 4), (10, 6), (11, 6), (9, 1), (9, 5), (6, 9),
+            (7, 9), (3, 2), (3, 6), (3, 7), (2, 6), (10, 8), (9, 9), (11, 8), (4, 6), (1, 6), (12, 8), (9, 8), (8, 8),
+            (8, 11), (5, 11), (6, 10)
+            # (7, 10), (10, 9), (10, 7), (9, 10), (6, 12), (4, 8), (7, 11), (12, 7),
+
+        ]
         for pos in existed_chess:
             game.play(pos)
         ai1 = AI('ai1', 1)
